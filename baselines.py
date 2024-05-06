@@ -27,34 +27,6 @@ def explanation_method_gnnexplainer(model, graph_data, graph_idx):
     return importance_dict
 
 
-
-
-def explanation_method_pgexplainer(model, graph_data, graph_idx):
-    model.eval()
-    batch = graph_data.batch if hasattr(graph_data, 'batch') else None
-
-    explainer = Explainer(
-        model=model,
-        algorithm=PGExplainer(epochs=50, num_hops=3, lr=0.01),
-        explanation_type='model',
-        node_mask_type='object',
-        edge_mask_type= None,
-        model_config=dict(
-            mode='binary_classification',
-            task_level='graph',
-            return_type='raw'
-        )
-    )
-
-    explanation = explainer(graph_data.x, graph_data.edge_index, batch=batch)
-    node_importance_scores = explanation.node_probs.detach().cpu().numpy()
-
-    # Convert array to dictionary {node_index: node_score}
-    importance_dict = {i: score for i, score in enumerate(node_importance_scores)}
-    return importance_dict
-
-
-
 def explanation_method_gradcam(model, graph_data, graph_idx):
     model.eval()  # Ensure the model is in evaluation mode
     graph_data.x = graph_data.x.float()  # Convert x to float
