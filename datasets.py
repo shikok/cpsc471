@@ -17,19 +17,26 @@ def binarize_labels(dataset):
     assert len(data.y) == len(labels)
     print(f"Splitting at {split} for dataset {dataset.__class__.__name__}")
 
-# Example of how to use the factory function
+from torch_geometric.data import Data
+
+def is_not_empty(data):
+    # This function checks if the graph is not empty.
+    return data.num_nodes > 0 and data.num_edges > 0
+
 def get_binary_dataset(dataset_name):
-    # Fetch and prepare the dataset
     if dataset_name == 'BACE':
-        dataset = MoleculeNet(root='data/BACE', name='BACE')
+        dataset = MoleculeNet(root='data/BACE', name='BACE', pre_filter=is_not_empty)
     elif dataset_name == 'BBBP':
-        dataset = MoleculeNet(root='data/BBBP', name='BBBP')
+        dataset = MoleculeNet(root='data/BBBP', name='BBBP', pre_filter=is_not_empty)
     elif dataset_name == 'BAMultiShapesDataset':
         dataset = BAMultiShapesDataset(root='data/BAMultiShapesDataset')
     elif dataset_name == 'BA2Motif':
         dataset = BA2MotifDataset(root='data/BA2MotifDataset')
     else:
-        raise ValueError('Invalid dataset name') # Maybe add BA2MotifDataset
+        raise ValueError('Invalid dataset name')
 
+    # Binarize the labels of the dataset
     binarize_labels(dataset)
+
     return dataset
+
