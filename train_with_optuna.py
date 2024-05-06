@@ -19,9 +19,7 @@ def objective(trial, dataset_name):
     batch_size = 64
 
     # Set device
-    # device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
-    # pick one of the following gpu ids: 3,4
-    device = torch.device('cuda:4' if torch.cuda.is_available() else 'cpu')
+    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
     # Load dataset
     dataset = get_binary_dataset(dataset_name)
