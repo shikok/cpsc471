@@ -152,19 +152,30 @@ class GraphNodeImportance:
 
     def visualize_all_node_importance_distribution(self, add_graph_embedding=False):
         # use UMAP to reduce the dimensionality of the node embeddings
-        import umap
-        umap = umap.UMAP(n_components=2, random_state=42)
+        from sklearn.manifold import TSNE
+        tsne = TSNE(n_components=2, random_state=42)
         all_node_embeddings = np.concatenate(list(self.graph_node_embeddings_dict.values()), axis=0)
-        embeddings_2d = umap.fit_transform(all_node_embeddings)
-        if self.importence_scores is None:
-            self.calculate_all_node_importance()
         all_dicts = [d for d in self.importence_scores.values()]
-        all_values = [v for d in all_dicts for v in d.values()]
-        plt.scatter(embeddings_2d[:, 0], embeddings_2d[:, 1], c=all_values, cmap='coolwarm', s=1)
-        plt.title('All Node Importance Distribution with 2D UMAP')
-        plt.colorbar()
+        all_values = [-v for d in all_dicts for v in d.values()]
+        if not add_graph_embedding:
+            embeddings_2d = tsne.fit_transform(all_node_embeddings)
+            if self.importence_scores is None:
+                self.calculate_all_node_importance()
+            plt.scatter(embeddings_2d[:, 0], embeddings_2d[:, 1], c=all_values, cmap='coolwarm', s=1)
+            plt.title('All Node Importance Distribution with 2D UMAP')
+            plt.colorbar()
         if add_graph_embedding:
-            plt.scatter(self.graph_embeddings[:, 0], self.graph_embeddings[:, 1], c=self.pred_labels, cmap='coolwarm', marker='x', s=10)
+            # cocutenate the graph embeddings with the node embeddings
+            all_graph_embeddings = np.array([g.squeeze() for g in self.graph_embeddings])
+            all_embeddings = np.concatenate((all_node_embeddings, all_graph_embeddings), axis=0)
+            index_offset = len(all_node_embeddings)
+            embeddings_2d = tsne.fit_transform(all_embeddings)
+            # Plot the graph embeddings with x and node embeddings with o
+            plt.scatter(embeddings_2d[:index_offset, 0], embeddings_2d[:index_offset, 1], c=all_values, cmap='coolwarm', s=1)
+            plt.scatter(embeddings_2d[index_offset:, 0], embeddings_2d[index_offset:, 1], c=self.pred_labels, cmap='coolwarm', marker='x', s=10)
+            plt.title('All Node Importance Distribution with 2D UMAP and Graph Embeddings')
+            plt.legend(['Node Embeddings', 'Graph Embeddings'])
+            plt.colorbar()
         plt.show()
 
     def explanation_method(self, graph_data, graph_idx):
