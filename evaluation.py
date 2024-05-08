@@ -1,8 +1,9 @@
 import torch
 import tqdm
 from torch_geometric.loader import DataLoader
+import numpy as np
 
-def evaluate_model_with_importance(model, dataset, explanation_method, method_name, predictions, sigma_factor=0.2 , batch_size=1, is_NLE=False):
+def evaluate_model_with_importance(model, dataset, explanation_method, method_name, predictions, sigma_factor=0.2 , batch_size=1, is_NLE=False, zero_nodes=True):
     """
     Evaluates the model using various explanation methods.
 
@@ -17,42 +18,62 @@ def evaluate_model_with_importance(model, dataset, explanation_method, method_na
     Returns:
     - A dictionary of metric results.
     """
-    loader = DataLoader(dataset, batch_size=batch_size, shuffle=False)
     metric_results = {"fidelity": [], "perturbation_impact": [], "accuracy": [], "stability": []}
 
     # Compute standard deviation of features across the entire dataset
     all_features = torch.cat([data.x for data in dataset])
     sigma = all_features.float().std(0, unbiased=False)
 
-    for graph_idx, graph_data in enumerate(tqdm.tqdm(loader)):
+    per_dataset = []
+    li_per_dataset = []
+    for graph_idx, graph_data in enumerate(dataset):
         if graph_data.num_nodes == 0:
             continue
-        original_pred = predictions[graph_idx]
-        importance_scores = explanation_method(model, graph_data, graph_idx)
-        perturbed_graph = perturb_graph(graph_data, importance_scores, predictions[graph_idx], sigma, sigma_factor, is_NLE=is_NLE)
-        perturbed_pred = model.predict(perturbed_graph.x, perturbed_graph.edge_index, perturbed_graph.batch).detach()
-        perturbed_pred_label = (perturbed_pred > 0.5).float()
+        importance_scores = explanation_method(model.to('cpu'), graph_data.to('cpu'), graph_idx)
+        p_graph = perturb_graph(graph_data, importance_scores, predictions[graph_idx], sigma, sigma_factor, is_NLE=is_NLE, perturb_least_important=False, zero_nodes=zero_nodes)
+        li_p_graph = perturb_graph(graph_data, importance_scores, predictions[graph_idx], sigma, sigma_factor, is_NLE=is_NLE, perturb_least_important=True, zero_nodes=zero_nodes)
+        li_per_dataset.append(li_p_graph)
+        per_dataset.append(p_graph)
+        
+    loader = DataLoader(per_dataset, batch_size=64, shuffle=False)
+    loader_li = DataLoader(li_per_dataset, batch_size=64, shuffle=False)
+    predicted_labels_perturbed = []
+    predicted_prob_perturbed = []
+    original_labels = []
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model.to(device)
+    for graph_idx, graph_data in enumerate(tqdm.tqdm(loader)):
+        graph_data.to(device)
+        model.eval()
+        prob = model(graph_data.x, graph_data.edge_index, graph_data.batch)
+        pred = (prob > 0.5).float()
+        predicted_labels_perturbed.append(pred)
+        predicted_prob_perturbed.append(prob)
+        original_labels = original_labels + graph_data.y.detach().cpu().numpy().tolist()
 
-        # Evaluate metrics
-        fidelity = torch.mean((original_pred == perturbed_pred_label).float()).item()
-        perturbation_impact = torch.mean(torch.abs(original_pred - perturbed_pred)).item()
-        accuracy = torch.mean((original_pred == graph_data.y).float()).item()
-        less_important_perturbed_graph = perturb_graph(graph_data, importance_scores, predictions[graph_idx], sigma, sigma_factor, is_NLE=is_NLE, perturb_least_important=True)
-        less_important_perturbed_pred = model.predict(less_important_perturbed_graph.x, less_important_perturbed_graph.edge_index, less_important_perturbed_graph.batch).detach()
-        stability = torch.mean(torch.abs(original_pred - less_important_perturbed_pred)).item()
+    predicted_labels_perturbed_li = []
+    
+    for graph_idx, graph_data in enumerate(tqdm.tqdm(loader_li)):
+        graph_data.to(device)
+        model.eval()
+        prob = model(graph_data.x, graph_data.edge_index, graph_data.batch)
+        pred = (prob > 0.5).float()
+        predicted_labels_perturbed_li.append(pred)
 
-        metric_results["fidelity"].append(fidelity)
-        metric_results["perturbation_impact"].append(perturbation_impact)
-        metric_results["accuracy"].append(accuracy)
-        metric_results["stability"].append(stability)
-
-    for key in metric_results:
-        metric_results[key] = sum(metric_results[key]) / len(metric_results[key])
-
+    predicted_prob_perturbed = torch.cat(predicted_prob_perturbed).detach().cpu().numpy()
+    predicted_labels_perturbed = torch.cat(predicted_labels_perturbed).detach().cpu().numpy()
+    predicted_labels_perturbed_li = torch.cat(predicted_labels_perturbed_li).detach().cpu().numpy()
+    original_labels = original_labels
+    metric_results["fidelity"] = (predictions != predicted_labels_perturbed).mean()
+    metric_results["perturbation_impact"] = np.abs(predicted_prob_perturbed - predictions).mean()
+    metric_results["accuracy"] = (original_labels == predicted_labels_perturbed).mean()
+    metric_results["stability"] = (predictions == predicted_labels_perturbed_li).mean()
     print(f"{method_name} - Evaluation Results:", metric_results)
     return metric_results
 
-def perturb_graph(graph_data, importance_scores, prediction, sigma, sigma_factor, top_k=5, is_NLE=False, perturb_least_important=False):
+
+
+def perturb_graph(graph_data, importance_scores, prediction, sigma, sigma_factor, top_k=2, is_NLE=False, perturb_least_important=False, zero_nodes=True):
     perturbed_graph = graph_data.clone()
     if is_NLE and prediction < 0.5:
         importance_scores = {k: -v for k, v in importance_scores.items()}
@@ -60,10 +81,10 @@ def perturb_graph(graph_data, importance_scores, prediction, sigma, sigma_factor
         top_k_nodes = sorted(importance_scores, key=importance_scores.get)[:top_k]
     else:    
         top_k_nodes = sorted(importance_scores, key=importance_scores.get, reverse=True)[:top_k]
-    
-    perturbed_graph.x = perturbed_graph.x.float()
-    for node in top_k_nodes:
-        noise = torch.randn(perturbed_graph.x[node].size()) * sigma * sigma_factor
-        perturbed_graph.x[node] += noise
 
+    for node_idx in top_k_nodes:
+        if zero_nodes:
+            perturbed_graph.x[node_idx] = torch.zeros_like(perturbed_graph.x[node_idx])
+        else:
+            perturbed_graph.x[node_idx] = perturbed_graph.x[node_idx] + sigma_factor * sigma
     return perturbed_graph
